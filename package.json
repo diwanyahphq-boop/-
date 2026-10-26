@@ -1,0 +1,14 @@
+{
+  "name": "almuthalath-pediatric-clinic",
+  "version": "1.0.0",
+  "description": "المثلث · نظام عيادة الأطفال — حساب الطبيب والاستعلامات على الشبكة الداخلية مع قاعدة أدوية الأطفال وحساب الجرعات",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "author": "أصيل الصافي",
+  "license": "UNLICENSED",
+  "private": true
+}

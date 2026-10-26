@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>المثلث لعيادة الأطفال — شاشة الانتظار</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600&family=Readex+Pro:wght@600;700&display=swap">
+<style>
+:root{--accent:#53b4a6;--brass:#d8a54c;--bg:#0b1312;--surface:#13201e;--border:#24403b;--text:#eef5f3;--muted:#9fb5b0}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:'IBM Plex Sans Arabic',Tahoma,Arial,sans-serif}
+.wrap{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto;padding:2vh 3vw;gap:2vh}
+header{display:flex;align-items:center;gap:1.2rem}
+header svg{width:6vh;height:6vh;color:var(--accent)}
+header h1{font-family:'Readex Pro',Tahoma,sans-serif;margin:0;font-size:4vh}
+header .doc{color:var(--muted);font-size:2.4vh}
+#clock{margin-inline-start:auto;font-size:4vh;font-family:'Readex Pro',sans-serif;font-variant-numeric:tabular-nums}
+main{display:grid;grid-template-columns:2fr 1fr;gap:3vw;align-items:stretch}
+.now{background:var(--surface);border:2px solid var(--accent);border-radius:3vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:3vh}
+.now .lbl{font-size:4vh;color:var(--muted)}
+.now .no{font-family:'Readex Pro',sans-serif;font-size:30vh;line-height:1;color:var(--accent);font-weight:700}
+.now .nm{font-size:6vh;font-weight:600}
+.now .no.empty{font-size:12vh;color:var(--muted)}
+.now.flash{animation:fl 1s 3}
+@keyframes fl{50%{background:var(--accent);color:#06231f}}
+.side{background:var(--surface);border:1px solid var(--border);border-radius:3vh;padding:3vh}
+.side h2{margin:0 0 2vh;font-size:3.4vh;color:var(--brass)}
+.next{display:flex;flex-wrap:wrap;gap:1.5vh}
+.next span{font-family:'Readex Pro',sans-serif;font-size:6vh;min-width:12vh;text-align:center;padding:1vh 2vh;border:1px solid var(--border);border-radius:2vh}
+.cnt{margin-top:3vh;font-size:3vh;color:var(--muted)}
+footer{text-align:center;color:var(--muted);font-size:1.8vh}
+footer b{color:var(--text)}
+.off{position:fixed;top:1rem;left:1rem;background:#b3261e;color:#fff;padding:.3rem .8rem;border-radius:6px;display:none}
+@media (max-width:800px){main{grid-template-columns:1fr}.now .no{font-size:20vh}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 4 37 34H3Z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/><path d="M20 16 28 30H12Z" fill="currentColor" fill-opacity=".45"/></svg>
+    <div><h1 id="clinic">عيادة الأطفال</h1><div class="doc" id="doctor"></div></div>
+    <div id="clock"></div>
+  </header>
+  <main>
+    <section class="now" id="now"><div class="lbl">المراجع الحالي</div><div class="no" id="no">—</div><div class="nm" id="nm"></div></section>
+    <section class="side"><h2>التالي</h2><div class="next" id="next"></div><div class="cnt" id="cnt"></div></section>
+  </main>
+  <footer><b>المثلث · نظام عيادة الأطفال</b><br>حقوق البرمجة © أصيل الصافي</footer>
+</div>
+<div class="off" id="off">انقطع الاتصال بالخادم...</div>
+<script>
+'use strict';
+let last = null;
+const $ = id => document.getElementById(id);
+function tick() { const d = new Date(); $('clock').textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+setInterval(tick, 10000); tick();
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime + i * 0.3;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      o.start(t); o.stop(t + 0.55);
+    });
+  } catch (e) { /* */ }
+}
+function render(s) {
+  $('clinic').textContent = s.clinicName || 'عيادة الأطفال';
+  $('doctor').textContent = s.doctorName || '';
+  document.title = (s.clinicName || 'عيادة الأطفال') + ' — شاشة الانتظار';
+  const cur = s.current ? s.current.queueNo : null;
+  $('no').textContent = cur || '—';
+  $('no').classList.toggle('empty', !cur);
+  $('nm').textContent = s.current ? s.current.name : 'بانتظار الاستدعاء';
+  $('next').innerHTML = s.next.map(n => '<span>' + n.queueNo + '</span>').join('') || '<span style="border:0;font-size:3vh;color:var(--muted)">لا يوجد</span>';
+  $('cnt').textContent = 'عدد المنتظرين: ' + s.waitingCount;
+  if (cur && last !== null && cur !== last) { const n = $('now'); n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash'); chime(); }
+  last = cur || 0;
+}
+const es = new EventSource('/api/display/events');
+es.addEventListener('display', e => { $('off').style.display = 'none'; render(JSON.parse(e.data)); });
+es.onerror = () => { $('off').style.display = 'block'; };
+document.addEventListener('click', () => chime(), { once: true });
+</script>
+</body>
+</html>
