@@ -4,6 +4,7 @@
 const PROGRAM_NAME = 'نظام عيادة الأطفال';
 const LOCAL = window.LocalBackend || null; // نسخة الهاتف: تعمل بدون خادم
 const NATIVE = window.AndroidBridge || null; // تطبيق أندرويد
+const NO_PRINT = !!window.PED_NO_PRINT; // صفحة المعاينة لا تسمح بالطباعة والمشاركة
 const S = { user: null, license: null, settings: {}, drugs: [], live: false, es: null, dirty: false, hash: '', queueDate: null };
 const $ = (s, el) => (el || document).querySelector(s);
 const $$ = (s, el) => [...(el || document).querySelectorAll(s)];
@@ -244,7 +245,7 @@ function renderShell() {
     '<main id="view"></main>' + footHtml() + '</div>' + bottomNavHtml();
   bindBottomNav();
   $('#logout').onclick = async () => {
-    if (S.dirty && !confirm('توجد تغييرات غير محفوظة، هل تريد الخروج؟')) return;
+    if (S.dirty && !await confirmBox('توجد تغييرات غير محفوظة في الزيارة، هل تريد الخروج بدون حفظ؟', 'خروج')) return;
     S.dirty = false;
     await api('POST', '/api/logout').catch(() => {});
     if (S.es) S.es.close();
@@ -303,8 +304,12 @@ function refreshCurrent() { if (!S.dirty) route(); }
 
 window.addEventListener('hashchange', () => {
   if (S.dirty && location.hash !== S.hash) {
-    if (!confirm('توجد تغييرات غير محفوظة في الزيارة. هل تريد المغادرة بدون حفظ؟')) { history.replaceState(null, '', S.hash); return; }
-    S.dirty = false;
+    const target = location.hash;
+    history.replaceState(null, '', S.hash);
+    confirmBox('توجد تغييرات غير محفوظة في الزيارة. هل تريد المغادرة بدون حفظ؟', 'مغادرة').then(ok => {
+      if (ok) { S.dirty = false; location.hash = target; }
+    });
+    return;
   }
   route();
 });
@@ -862,8 +867,8 @@ function printRx(v, p) {
     '<div class="br">المثلث · ' + PROGRAM_NAME + ' — حقوق البرمجة © أصيل الصافي</div></div>';
   const ov = document.createElement('div');
   ov.className = 'rx-overlay';
-  ov.innerHTML = '<div class="rx-bar"><button class="btn primary" data-a="print">طباعة / PDF</button>' +
-    (navigator.share || (NATIVE && NATIVE.share) ? '<button class="btn" data-a="share">مشاركة</button>' : '') +
+  ov.innerHTML = '<div class="rx-bar">' + (NO_PRINT ? '' : '<button class="btn primary" data-a="print">طباعة / PDF</button>') +
+    (!NO_PRINT && (navigator.share || (NATIVE && NATIVE.share)) ? '<button class="btn" data-a="share">مشاركة</button>' : '') +
     '<button class="btn" data-a="copy">نسخ النص</button><span class="spacer"></span><button class="btn" data-a="close" aria-label="إغلاق">✕</button></div>' + paper;
   document.body.appendChild(ov);
   document.body.classList.add('rx-open');

@@ -21,7 +21,17 @@ const html = '<!doctype html>\n<html lang="ar" dir="rtl">\n<head>\n<meta charset
   ['lib/serial.js', 'lib/core.js', 'public/dose.js', 'public/local-backend.js', 'public/app.js'].map(f => script(read(f))).join('\n') +
   '\n</body>\n</html>\n';
 
-const out = process.argv[2] || path.join(root, 'dist/mobile/index.html');
+const args = process.argv.slice(2);
+const preview = args.includes('--preview');
+const out = args.find(a => !a.startsWith('--')) || path.join(root, 'dist/mobile/index.html');
+let result = html;
+if (preview) {
+  // صفحة معاينة: محتوى الصفحة فقط (الإطار يضيف هيكل المستند)، بدون أزرار الطباعة والمشاركة
+  result = result.replace(/^<!doctype html>\n<html[^>]*>\n<head>\n<meta charset="utf-8">\n<meta name="viewport"[^>]*>\n/, '')
+    .replace('</head>\n<body>\n', '').replace('\n</body>\n</html>\n', '\n')
+    .replace('<div id="root"></div>', '<div id="root"></div>\n<script>window.PED_NO_PRINT = true; document.documentElement.dir = \'rtl\'; document.documentElement.lang = \'ar\';</script>');
+}
 fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, html);
-console.log('built', out, Math.round(html.length / 1024) + ' KB');
+fs.writeFileSync(out, result);
+const html_ = result;
+console.log('built', out, Math.round(html_.length / 1024) + ' KB');
