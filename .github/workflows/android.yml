@@ -1,0 +1,59 @@
+name: Android APK (نسخة الهاتف)
+
+on:
+  push:
+    branches: [main, claude/pediatric-clinic-system-jszkjp]
+    paths: ['public/**', 'lib/**', 'tools/**', 'android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Tests
+        run: npm test
+
+      - name: Build single-file mobile app into Android assets
+        run: node tools/build-mobile.js android/app/src/main/assets/index.html
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build APK
+        run: gradle -p android assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk AlMuthalath-PedClinic.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AlMuthalath-PedClinic-apk
+          path: AlMuthalath-PedClinic.apk
+
+      - name: Publish preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-preview-${{ github.run_number }}
+          name: نسخة الهاتف للمعاينة ${{ github.run_number }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: |
+            المثلث · نظام عيادة الأطفال — نسخة أندرويد للمعاينة.
+            حمّل ملف AlMuthalath-PedClinic.apk على الهاتف وثبّته (اسمح بالتثبيت من مصادر غير معروفة).
+            حقوق البرمجة © أصيل الصافي
+          files: AlMuthalath-PedClinic.apk

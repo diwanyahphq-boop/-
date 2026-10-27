@@ -2,6 +2,8 @@
 'use strict';
 
 const PROGRAM_NAME = 'نظام عيادة الأطفال';
+const LOCAL = window.LocalBackend || null; // نسخة الهاتف: تعمل بدون خادم
+const NATIVE = window.AndroidBridge || null; // تطبيق أندرويد
 const S = { user: null, license: null, settings: {}, drugs: [], live: false, es: null, dirty: false, hash: '', queueDate: null };
 const $ = (s, el) => (el || document).querySelector(s);
 const $$ = (s, el) => [...(el || document).querySelectorAll(s)];
@@ -33,11 +35,16 @@ const icon = n => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 
 // ---------------- الاتصال بالخادم ----------------
 async function api(method, url, body) {
-  const opt = { method, headers: {}, credentials: 'same-origin' };
-  if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-  let res;
-  try { res = await fetch(url, opt); } catch { throw new Error('تعذر الاتصال بالخادم — تأكد من تشغيل جهاز الخادم والشبكة'); }
-  const data = await res.json().catch(() => ({}));
+  let res, data;
+  if (LOCAL) {
+    const r = await LOCAL.request(method, url, body);
+    res = { status: r.status, ok: r.status < 400 }; data = r.data || {};
+  } else {
+    const opt = { method, headers: {}, credentials: 'same-origin' };
+    if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    try { res = await fetch(url, opt); } catch { throw new Error('تعذر الاتصال بالخادم — تأكد من تشغيل جهاز الخادم والشبكة'); }
+    data = await res.json().catch(() => ({}));
+  }
   if (res.status === 401 && url !== '/api/login' && url !== '/api/me/password') { S.user = null; boot(); throw new Error(data.error || 'يجب تسجيل الدخول'); }
   if (res.status === 402 && /انتهت/.test(data.error || '')) { boot(); }
   if (!res.ok) { const e = new Error(data.error || 'حدث خطأ'); e.status = res.status; throw e; }
@@ -143,6 +150,7 @@ function renderSetup() {
     '<div class="field"><label>اسم المستخدم (إنكليزي)</label><input name="username" dir="ltr" autocomplete="username" required></div>' +
     '<div class="field"><label>كلمة المرور</label><input name="password" type="password" autocomplete="new-password" required minlength="6"></div>' +
     '<div class="field"><label>تأكيد كلمة المرور</label><input name="password2" type="password" autocomplete="new-password" required></div>' +
+    (LOCAL ? '<label class="check"><input type="checkbox" name="demo" checked> إضافة مراجعين تجريبيين وحساب استعلامات للمعاينة</label>' : '') +
     '<button class="btn primary" style="width:100%">إنشاء الحساب والبدء</button></form>', PROGRAM_NAME);
   $('#f').onsubmit = async e => {
     e.preventDefault();
@@ -151,6 +159,11 @@ function renderSetup() {
     try {
       await api('POST', '/api/setup', d);
       await api('POST', '/api/login', { username: d.username, password: d.password });
+      if (LOCAL && d.demo) {
+        LOCAL.seedDemo();
+        await api('POST', '/api/users', { username: 'reception', password: '123456', name: 'موظف الاستعلامات', role: 'reception' }).catch(() => {});
+        toast('أضيف حساب الاستعلامات: reception / 123456', null, 7000);
+      }
       location.hash = '#/queue'; boot();
     } catch (err) { errToast(err); }
   };
@@ -165,7 +178,7 @@ function renderLogin(st) {
     '<p class="small muted" style="margin:.8rem 0 0">حساب الطبيب وحساب الاستعلامات يدخلان من نفس الشاشة، وكل حساب يرى صلاحياته فقط.</p>', st.clinicName);
   $('#f').onsubmit = async e => {
     e.preventDefault();
-    try { await api('POST', '/api/login', formData(e.target)); boot(); } catch (err) { errToast(err); }
+    try { await api('POST', '/api/login', formData(e.target)); history.replaceState(null, '', '#/queue'); boot(); } catch (err) { errToast(err); }
   };
 }
 
@@ -183,6 +196,7 @@ function bindCopyMachine() {
   if (b) b.onclick = () => copyText(S.license.machine);
 }
 async function copyText(t) {
+  if (NATIVE && NATIVE.copy) { NATIVE.copy(t); toast('تم النسخ'); return; }
   try { await navigator.clipboard.writeText(t); toast('تم النسخ'); }
   catch {
     const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
@@ -221,13 +235,14 @@ function renderShell() {
   const l = S.license;
   $('#root').innerHTML =
     '<div class="app">' +
-    '<header class="top"><button class="btn ghost sm menu-btn" id="menuBtn" aria-label="القائمة">☰</button>' + brandHtml() +
+    '<header class="top">' + brandHtml() +
     '<div class="userbox"><span class="live" id="live" title="الاتصال المباشر"></span><span class="small uname">' + esc(S.settings.clinicName) + ' · <b>' + esc(S.user.name) + '</b> <span class="badge">' + (S.user.role === 'doctor' ? 'الطبيب' : 'الاستعلامات') + '</span></span>' +
     '<button class="btn sm" id="logout">خروج</button></div></header>' +
     (l.trial ? '<div class="trial"><b>نسخة تجريبية</b><span>متبقي ' + l.daysLeft + ' يوم · الحد ' + l.patientLimit + ' مراجعاً</span><span class="spacer"></span>' + (S.user.role === 'doctor' ? '<a class="btn sm brass" href="#/settings">تفعيل البرنامج</a>' : '') + '</div>' : '') +
     '<nav class="side" id="side">' + navItems().map(([k, t]) => '<a href="#/' + k + '" data-nav="' + k + '">' + icon(k) + '<span>' + t + '</span></a>').join('') +
-    '<a href="/display" target="_blank" rel="noopener">' + icon('display') + '<span>شاشة الانتظار</span></a></nav>' +
-    '<main id="view"></main>' + footHtml() + '</div>';
+    (LOCAL ? '' : '<a href="/display" target="_blank" rel="noopener">' + icon('display') + '<span>شاشة الانتظار</span></a>') + '</nav>' +
+    '<main id="view"></main>' + footHtml() + '</div>' + bottomNavHtml();
+  bindBottomNav();
   $('#logout').onclick = async () => {
     if (S.dirty && !confirm('توجد تغييرات غير محفوظة، هل تريد الخروج؟')) return;
     S.dirty = false;
@@ -235,16 +250,42 @@ function renderShell() {
     if (S.es) S.es.close();
     S.user = null; boot();
   };
-  $('#menuBtn').onclick = () => $('#side').classList.toggle('open');
+}
+
+// شريط التنقل السفلي للهاتف
+function bottomNavHtml() {
+  const items = navItems();
+  const short = { queue: 'الانتظار', patients: 'المراجعون', appointments: 'المواعيد', calc: 'الجرعات', settings: S.user.role === 'doctor' ? 'الإعدادات' : 'حسابي' };
+  const main = S.user.role === 'doctor' ? ['queue', 'patients', 'appointments', 'calc'] : ['queue', 'patients', 'appointments', 'settings'];
+  const more = items.filter(([k]) => !main.includes(k));
+  return '<nav class="bottom" id="bnav">' + main.map(k => '<a href="#/' + k + '" data-nav="' + k + '">' + icon(k) + '<span>' + short[k] + '</span></a>').join('') +
+    (more.length ? '<button type="button" id="moreBtn" data-more>' + '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg><span>المزيد</span></button>' : '') + '</nav>' +
+    (more.length ? '<div class="more-sheet" id="moreSheet" hidden><div class="more-box">' + more.map(([k, t]) => '<a href="#/' + k + '" data-nav="' + k + '">' + icon(k) + '<span>' + t + '</span></a>').join('') +
+      (LOCAL ? '' : '<a href="/display" target="_blank" rel="noopener">' + icon('display') + '<span>شاشة الانتظار</span></a>') + '</div></div>' : '');
+}
+function bindBottomNav() {
+  const sheet = $('#moreSheet'), btn = $('#moreBtn');
+  if (!sheet) return;
+  btn.onclick = () => { sheet.hidden = !sheet.hidden; };
+  sheet.onclick = e => { if (e.target === sheet || e.target.closest('a')) sheet.hidden = true; };
 }
 
 function connectEvents() {
   if (S.es) S.es.close();
-  const es = new EventSource('/api/events');
-  S.es = es;
   const setLive = on => { S.live = on; const l = $('#live'); if (l) l.classList.toggle('on', on); };
-  es.onopen = () => setLive(true);
-  es.onerror = () => setLive(false);
+  let es;
+  if (LOCAL) {
+    // نفس واجهة EventSource فوق ناقل الأحداث المحلي
+    const handlers = {};
+    const off = LOCAL.subscribe((type, data) => (handlers[type] || []).forEach(fn => fn({ data: JSON.stringify(data) })));
+    es = { addEventListener: (t, fn) => { (handlers[t] = handlers[t] || []).push(fn); }, close: off };
+    setTimeout(() => setLive(true));
+  } else {
+    es = new EventSource('/api/events');
+    es.onopen = () => setLive(true);
+    es.onerror = () => setLive(false);
+  }
+  S.es = es;
   const view = () => location.hash.split('/')[1] || 'queue';
   es.addEventListener('queue', () => { if (view() === 'queue') viewQueue(true); if (view() === 'patient') refreshCurrent(); });
   es.addEventListener('patients', () => { if (view() === 'patients') viewPatients(true); });
@@ -269,12 +310,23 @@ window.addEventListener('hashchange', () => {
 });
 window.addEventListener('beforeunload', e => { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
+// زر الرجوع في تطبيق أندرويد: يغلق النوافذ أولاً ثم يرجع للصفحة السابقة
+window.__back = () => {
+  const rx = $('.rx-overlay'); if (rx) { rx.querySelector('[data-a=close]').click(); return true; }
+  const m = $$('.modal-bg').pop(); if (m) { m.querySelector('[data-x]').click(); return true; }
+  const sh = $('#moreSheet'); if (sh && !sh.hidden) { sh.hidden = true; return true; }
+  if (S.user && !/^#\/queue$/.test(location.hash || '#/queue')) { history.back(); return true; }
+  return false;
+};
+
 function route() {
   if (!S.user || !$('#view')) return;
   S.hash = location.hash || '#/queue';
   const [, name, id] = S.hash.split('/');
   $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === name || (name === 'patient' && a.dataset.nav === 'patients') || (name === 'visit' && a.dataset.nav === 'queue')));
-  const side = $('#side'); if (side) side.classList.remove('open');
+  const more = $('#moreBtn');
+  if (more) more.classList.toggle('active', !!$('#moreSheet [data-nav].active'));
+  document.body.classList.toggle('focus-mode', name === 'visit');
   const doctorOnly = ['visit', 'drugs', 'calc', 'reports', 'users'];
   if (doctorOnly.includes(name) && S.user.role !== 'doctor') { location.hash = '#/queue'; return; }
   const views = { queue: viewQueue, patients: viewPatients, patient: () => viewPatient(id), visit: () => viewVisit(id), appointments: viewAppointments,
@@ -283,6 +335,30 @@ function route() {
   window.scrollTo(0, 0);
 }
 const V = html => { $('#view').innerHTML = html; };
+
+// على الهاتف تتحول الجداول إلى بطاقات: كل خلية تأخذ عنوان عمودها
+const TITLE_COLS = ['المراجع', 'الاسم', 'الدواء'];
+function labelTables(root) {
+  $$('table:not([data-rt])', root).forEach(t => {
+    const heads = $$('thead th', t).map(th => th.textContent.trim());
+    t.dataset.rt = '1';
+    if (!heads.length) return;
+    t.classList.add('rt');
+    if (heads[0] === 'الرقم') t.classList.add('rt-q');
+    $$('tbody tr', t).forEach(tr => {
+      const cells = [...tr.children];
+      if (cells.length === 1) { tr.classList.add('rt-empty'); return; }
+      cells.forEach((td, i) => {
+        const h = heads[i] || '';
+        if (!h) td.classList.add('c-actions');
+        else if (h === 'الرقم') td.classList.add('c-no');
+        else if (TITLE_COLS.includes(h)) td.classList.add('c-title');
+        else td.dataset.l = h;
+      });
+    });
+  });
+}
+new MutationObserver(() => labelTables(document)).observe(document.documentElement, { childList: true, subtree: true });
 
 // ---------------- قائمة الانتظار ----------------
 async function viewQueue(silent) {
@@ -601,8 +677,8 @@ async function viewVisit(id) {
   const ta = (name, label, rows) => '<div class="field"><label>' + label + '</label><textarea name="' + name + '" rows="' + (rows || 2) + '">' + esc(v[name]) + '</textarea></div>';
   V('<div class="page-head"><a class="btn sm" href="#/queue">→ قائمة الانتظار</a><h2>' + esc(p.name) + '</h2><span class="qno">' + v.queueNo + '</span><span class="badge b-' + v.status + '">' + STATUS_AR[v.status] + '</span><span class="badge">' + TYPE_AR[v.type] + '</span><span class="spacer"></span>' +
     '<span class="small muted" id="saveState"></span>' +
-    '<button class="btn" id="save">حفظ</button><button class="btn" id="print">حفظ وطباعة الوصفة</button>' +
-    (v.status !== 'done' ? '<button class="btn primary" id="finish">إنهاء الكشف</button>' : '') + '</div>' +
+    '<div class="visit-actions"><button class="btn" id="save">حفظ</button><button class="btn" id="print">الوصفة</button>' +
+    (v.status !== 'done' ? '<button class="btn primary" id="finish">إنهاء الكشف</button>' : '') + '</div></div>' +
     '<div class="visit-grid"><aside>' +
     '<div class="card"><dl class="kv"><dt>العمر</dt><dd>' + Dose.ageText(p.dob) + '</dd><dt>الجنس</dt><dd>' + esc(p.sex || '—') + '</dd><dt>الملف</dt><dd>' + esc(p.fileNo) + '</dd>' +
     (p.bloodType ? '<dt>الدم</dt><dd>' + esc(p.bloodType) + '</dd>' : '') + (p.chronic ? '<dt>مزمن</dt><dd>' + esc(p.chronic) + '</dd>' : '') +
@@ -753,36 +829,57 @@ async function viewVisit(id) {
 }
 
 // ---------------- طباعة الوصفة ----------------
+function rxPlainText(v, p) {
+  const s = S.settings, w = v.vitals && v.vitals.weight;
+  const lines = [s.clinicName, s.doctorName + (s.specialty ? ' — ' + s.specialty : ''), '',
+    'الاسم: ' + p.name, 'العمر: ' + Dose.ageText(p.dob, v.checkInAt) + (w ? ' · الوزن: ' + fmt(w) + ' كغم' : ''), 'التاريخ: ' + v.date, ''];
+  if (p.allergies) lines.push('حساسية: ' + p.allergies, '');
+  (v.prescription || []).forEach((r, i) => {
+    lines.push((i + 1) + '. ' + r.name + (r.form ? ' — ' + r.form : ''));
+    lines.push('   ' + r.text + (r.durationDays ? ' — لمدة ' + r.durationDays + ' يوم' : ''));
+    if (r.instructions) lines.push('   ' + r.instructions);
+  });
+  if (v.followUp) lines.push('', 'موعد المراجعة: ' + v.followUp);
+  return lines.join('\n');
+}
+
+// عرض الوصفة داخل الصفحة (يعمل على الهاتف والحاسوب وتطبيق أندرويد)
 function printRx(v, p) {
   const s = S.settings;
   const w = v.vitals && v.vitals.weight;
-  const items = (v.prescription || []).map((r, i) => '<li><div class="dn">' + esc(r.name) + '</div><div class="df">' + esc(r.form) + (r.route ? ' · ' + esc(r.route) : '') + '</div>' +
+  const items = (v.prescription || []).map(r => '<li><div class="dn">' + esc(r.name) + '</div><div class="df">' + esc(r.form) + (r.route ? ' · ' + esc(r.route) : '') + '</div>' +
     '<div class="dd">' + esc(r.text) + (r.durationDays ? ' — لمدة ' + r.durationDays + ' يوم' : '') + '</div>' + (r.instructions ? '<div class="di">' + esc(r.instructions) + '</div>' : '') + '</li>').join('');
-  const html = '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>وصفة طبية — ' + esc(p.name) + '</title>' +
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=Readex+Pro:wght@600;700&display=swap">' +
-    '<style>@page{size:A5;margin:10mm}*{box-sizing:border-box}body{font-family:"IBM Plex Sans Arabic",Tahoma,Arial,sans-serif;color:#111;margin:0;font-size:13px;background:#fff}' +
-    '.hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px double #0e5a52;padding-bottom:8px}.hd h1{font-family:"Readex Pro",Tahoma,sans-serif;font-size:20px;margin:0;color:#0e5a52}.hd .sub{color:#444;font-size:12px}' +
-    '.pt{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 12px;margin:10px 0;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:12px}.pt b{color:#0e5a52}' +
-    '.rx{font-family:serif;font-size:30px;color:#0e5a52;font-weight:700;direction:ltr;text-align:left;margin:4px 0}ol{margin:0;padding-inline-start:20px}li{margin-bottom:10px}' +
-    '.dn{font-weight:700;direction:ltr;text-align:right;font-size:14px}.df{color:#555;font-size:11px}.dd{font-weight:600}.di{color:#444;font-size:12px}' +
-    '.al{background:#fde8e6;color:#9a1c14;padding:4px 8px;border-radius:4px;font-weight:600;font-size:12px}' +
-    '.ft{margin-top:24px;display:flex;justify-content:space-between;align-items:flex-end;font-size:12px}.sig{border-top:1px solid #333;padding-top:4px;min-width:150px;text-align:center}' +
-    '.br{margin-top:14px;border-top:1px solid #ddd;padding-top:4px;text-align:center;color:#777;font-size:10px}.nt{font-size:12px;color:#333;margin-top:10px}' +
-    '@media screen{body{max-width:148mm;margin:10mm auto;padding:10mm;box-shadow:0 0 10px rgba(0,0,0,.15)}}</style></head><body>' +
+  const paper = '<div class="rx-paper">' +
     '<div class="hd"><div><h1>' + esc(s.doctorName || '') + '</h1><div class="sub">' + esc(s.specialty) + '</div></div>' +
-    '<div style="text-align:left"><b style="font-size:15px">' + esc(s.clinicName) + '</b><div class="sub">' + esc(s.address) + '</div><div class="sub" dir="ltr">' + esc(s.phone) + '</div><div class="sub">' + esc(s.workHours) + '</div></div></div>' +
+    '<div class="hd-l"><b>' + esc(s.clinicName) + '</b><div class="sub">' + esc(s.address) + '</div><div class="sub" dir="ltr">' + esc(s.phone) + '</div><div class="sub">' + esc(s.workHours) + '</div></div></div>' +
     '<div class="pt"><div><b>الاسم:</b> ' + esc(p.name) + '</div><div><b>العمر:</b> ' + Dose.ageText(p.dob, v.checkInAt) + '</div><div><b>التاريخ:</b> ' + esc(v.date) + '</div>' +
     '<div><b>الوزن:</b> ' + (w ? fmt(w) + ' كغم' : '—') + '</div><div><b>الجنس:</b> ' + esc(p.sex || '—') + '</div><div><b>رقم الملف:</b> ' + esc(p.fileNo) + '</div></div>' +
     (p.allergies ? '<div class="al">حساسية: ' + esc(p.allergies) + '</div>' : '') +
     '<div class="rx">℞</div><ol>' + items + '</ol>' +
     (v.followUp ? '<div class="nt"><b>موعد المراجعة:</b> ' + esc(v.followUp) + '</div>' : '') +
     (s.rxFooter ? '<div class="nt">' + esc(s.rxFooter) + '</div>' : '') +
-    '<div class="ft"><div></div><div class="sig">توقيع الطبيب</div></div>' +
-    '<div class="br">المثلث · ' + PROGRAM_NAME + ' — حقوق البرمجة © أصيل الصافي</div>' +
-    '<script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script></body></html>';
-  const win = window.open('', '_blank', 'width=700,height=900');
-  if (!win) return toast('اسمح بالنوافذ المنبثقة لطباعة الوصفة', 'err');
-  win.document.open(); win.document.write(html); win.document.close();
+    '<div class="ft"><div class="sig">توقيع الطبيب</div></div>' +
+    '<div class="br">المثلث · ' + PROGRAM_NAME + ' — حقوق البرمجة © أصيل الصافي</div></div>';
+  const ov = document.createElement('div');
+  ov.className = 'rx-overlay';
+  ov.innerHTML = '<div class="rx-bar"><button class="btn primary" data-a="print">طباعة / PDF</button>' +
+    (navigator.share || (NATIVE && NATIVE.share) ? '<button class="btn" data-a="share">مشاركة</button>' : '') +
+    '<button class="btn" data-a="copy">نسخ النص</button><span class="spacer"></span><button class="btn" data-a="close" aria-label="إغلاق">✕</button></div>' + paper;
+  document.body.appendChild(ov);
+  document.body.classList.add('rx-open');
+  const close = () => { ov.remove(); document.body.classList.remove('rx-open'); };
+  const text = rxPlainText(v, p);
+  ov.addEventListener('click', async e => {
+    const a = e.target.closest('[data-a]'); if (!a) return;
+    if (a.dataset.a === 'close') close();
+    if (a.dataset.a === 'copy') copyText(text);
+    if (a.dataset.a === 'share' && NATIVE && NATIVE.share) NATIVE.share('وصفة طبية — ' + p.name, text);
+    else if (a.dataset.a === 'share') { try { await navigator.share({ title: 'وصفة طبية — ' + p.name, text }); } catch { /* أُلغيت المشاركة */ } }
+    if (a.dataset.a === 'print') {
+      if (NATIVE && NATIVE.print) NATIVE.print('وصفة ' + p.name);
+      else { try { window.print(); } catch { toast('الطباعة غير متاحة هنا — استخدم نسخ النص أو المشاركة', 'err'); } }
+    }
+  });
 }
 
 // ---------------- المواعيد ----------------
@@ -1023,14 +1120,17 @@ async function viewSettings() {
     (isDoc ? '<div class="card"><h3>بيانات العيادة (تظهر في الوصفة)</h3><form id="sf"><div class="grid g2">' + inp('clinicName', 'اسم العيادة') + inp('doctorName', 'اسم الطبيب') + inp('specialty', 'الاختصاص') + inp('phone', 'الهاتف', ' dir="ltr"') + inp('address', 'العنوان') + inp('workHours', 'أوقات الدوام') + '</div>' +
       '<div class="grid g4">' + inp('feeNew', 'أجور الكشف', ' type="number"') + inp('feeReview', 'أجور المراجعة', ' type="number"') + inp('currency', 'العملة') + inp('reviewDays', 'المراجعة المجانية خلال (يوم)', ' type="number"') + '</div>' +
       inp('rxFooter', 'ملاحظة أسفل الوصفة') + '<button class="btn primary">حفظ الإعدادات</button></form></div>' : '') +
-    '<div class="card"><h3>الاتصال من أجهزة الشبكة</h3><p class="small">افتح المتصفح على أي جهاز في شبكة العيادة واكتب العنوان:</p><div class="machine" style="font-size:1.1rem">' + esc(location.origin) + '</div>' +
-    '<p class="small muted">شاشة الانتظار للتلفاز في صالة الانتظار: <a href="/display" target="_blank" rel="noopener" dir="ltr">' + esc(location.origin) + '/display</a></p></div>' +
+    (LOCAL ? '<div class="card"><h3>نسخة الهاتف</h3><p class="small">هذه النسخة تعمل على الهاتف وحده بدون شبكة، والبيانات محفوظة في ذاكرة هذا الهاتف. يمكن الدخول بحساب الطبيب أو الاستعلامات من نفس الهاتف عبر «خروج» ثم الدخول بالحساب الآخر.</p></div>'
+      : '<div class="card"><h3>الاتصال من أجهزة الشبكة</h3><p class="small">افتح المتصفح على أي جهاز في شبكة العيادة واكتب العنوان:</p><div class="machine" style="font-size:1.1rem">' + esc(location.origin) + '</div>' +
+      '<p class="small muted">شاشة الانتظار للتلفاز في صالة الانتظار: <a href="/display" target="_blank" rel="noopener" dir="ltr">' + esc(location.origin) + '/display</a></p></div>') +
     '<div class="card"><h3>المظهر</h3><select id="theme" style="max-width:240px"><option value="auto">تلقائي حسب الجهاز</option><option value="light">فاتح</option><option value="dark">داكن</option></select></div>' +
     '<div class="card"><h3>تغيير كلمة المرور</h3><form id="pf" class="grid g3" style="align-items:end"><div class="field"><label>الحالية</label><input name="oldPassword" type="password" autocomplete="current-password"></div><div class="field"><label>الجديدة</label><input name="newPassword" type="password" autocomplete="new-password"></div><div class="field"><button class="btn">تغيير</button></div></form></div>' +
     (isDoc ? '<div class="card"><h3>الترخيص</h3>' + (l.activated ? '<div class="alert ok">البرنامج مفعل — نسخة كاملة</div>' : '<div class="alert warn">نسخة تجريبية — متبقي ' + l.daysLeft + ' يوم، والحد ' + l.patientLimit + ' مراجعاً</div>') +
       machineHtml() + (l.activated ? '' : activationForm()) + '</div>' +
-      '<div class="card"><h3>النسخ الاحتياطي</h3><p class="small muted">يحفظ النظام نسخة تلقائية يومية في مجلد data/backups على جهاز الخادم (آخر 30 يوماً). يمكنك أيضاً تنزيل نسخة كاملة وحفظها على فلاش.</p>' +
-      '<div class="row"><a class="btn primary" href="/api/backup" download>تنزيل نسخة احتياطية</a><label class="btn" style="margin:0;color:var(--text)">استعادة من ملف<input type="file" id="restore" accept=".json,application/json" hidden></label></div></div>' : ''));
+      (LOCAL ? '<div class="card"><h3>النسخ الاحتياطي</h3><p class="small muted">انسخ النسخة الاحتياطية واحفظها في مكان آمن (رسالة لنفسك أو ملاحظة). مسح بيانات التطبيق يحذف البيانات من الهاتف.</p>' +
+        '<div class="row"><button class="btn primary" id="bkCopy">نسخ النسخة الاحتياطية</button><button class="btn" id="bkPaste">استعادة من نص</button></div></div>'
+      : '<div class="card"><h3>النسخ الاحتياطي</h3><p class="small muted">يحفظ النظام نسخة تلقائية يومية في مجلد data/backups على جهاز الخادم (آخر 30 يوماً). يمكنك أيضاً تنزيل نسخة كاملة وحفظها على فلاش.</p>' +
+        '<div class="row"><a class="btn primary" href="/api/backup" download>تنزيل نسخة احتياطية</a><label class="btn" style="margin:0;color:var(--text)">استعادة من ملف<input type="file" id="restore" accept=".json,application/json" hidden></label></div></div>') : ''));
   $('#theme').value = theme;
   $('#theme').onchange = e => { try { localStorage.setItem('ped-theme', e.target.value); } catch { /* */ } applyTheme(); };
   $('#pf').onsubmit = async e => {
@@ -1044,10 +1144,22 @@ async function viewSettings() {
   };
   bindCopyMachine();
   if ($('#act')) bindActivation(() => boot());
+  const restoreData = async data => {
+    await api('POST', '/api/restore', data); toast('تمت الاستعادة — سجل الدخول من جديد'); setTimeout(() => location.reload(), 1200);
+  };
+  if (LOCAL) {
+    $('#bkCopy').onclick = async () => { try { copyText(JSON.stringify(await api('GET', '/api/backup'))); } catch (e) { errToast(e); } };
+    $('#bkPaste').onclick = () => modal('استعادة نسخة احتياطية', '<p class="small">الصق نص النسخة الاحتياطية. ستُستبدل جميع البيانات الحالية.</p><textarea name="data" rows="8" dir="ltr"></textarea>', [
+      { label: 'استعادة', cls: 'primary', onClick: async el => {
+        let data; try { data = JSON.parse(formData(el).data); } catch { toast('النص غير صالح', 'err'); return false; }
+        await restoreData(data);
+      } }, { label: 'إلغاء' }]);
+    return;
+  }
   $('#restore').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     if (!await confirmBox('ستُستبدل جميع البيانات الحالية بمحتوى الملف (تُحفظ نسخة من الحالية تلقائياً). متابعة؟', 'استعادة')) { e.target.value = ''; return; }
-    try { const data = JSON.parse(await f.text()); await api('POST', '/api/restore', data); toast('تمت الاستعادة — سجل الدخول من جديد'); setTimeout(() => location.reload(), 1200); }
+    try { await restoreData(JSON.parse(await f.text())); }
     catch (err) { errToast(err); }
   };
 }
